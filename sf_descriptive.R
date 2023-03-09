@@ -57,7 +57,7 @@ barplot(table(d.bird$sex_genetics[which(d.bird$Age > 1)]), main="sex")
 
 
 # adult data 
-df_adult =d.bird[d.bird$Age>1,]
+df_adult = d.bird[d.bird$Age>1,]
 cols = c("Age","Wing","Tarsus","Bill_length","P8","weight","Fat","Muscle","sex_genetics")
 df_adult_sub = data.frame(df_adult[cols])
 
