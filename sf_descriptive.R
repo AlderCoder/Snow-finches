@@ -3,6 +3,8 @@ library(stringr)
 require(grDevices)
 library(dplyr)
 
+#push test
+
 # data load
 d.bird <- read_delim("C:/Users/joela/OneDrive - ETH Zurich/FS23/Snow-finches/Data/SF_ringlist.csv", 
                           delim = ";", escape_double = FALSE, trim_ws = TRUE)
