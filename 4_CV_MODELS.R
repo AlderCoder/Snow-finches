@@ -1,3 +1,4 @@
+library(readr)
 library(mice)
 library(rpart)
 library(randomForest)
@@ -48,26 +49,27 @@ df_adult_sub = data.frame(df_adult[cols])
 
 # chaning type of variables
 str(df_adult_sub)
-df_adult_sub$sex_genetics <- as.numeric(df_adult_sub$sex_genetics)
-df_adult_sub$Fat <- as.factor(df_adult_sub$Fat)
-df_adult_sub$Muscle <- as.factor(df_adult_sub$Muscle)
+df_adult_sub$sex_genetics <- as.factor(df_adult_sub$sex_genetics)
+#df_adult_sub$Fat <- as.factor(df_adult_sub$Fat)
+#df_adult_sub$Muscle <- as.factor(df_adult_sub$Muscle)
 
 # Impute missing value with MICE using the best method from cv imputation with 5 iterations
-data_imputed <- mice::complete(mice(df_adult_sub, m = 5, method = "norm.predict"))
+data_imputed <- mice::complete(mice(df_adult_sub, m = 5, method = "norm.predict", maxit = 20))
 
 n <- dim(data_imputed)[1]
-KFold.error <- numeric(5)
+KFold.error <- numeric(3)
 # logit model
 K <- 20
 folds <- sample(cut(seq(1,n),breaks=K,labels=FALSE), replace = FALSE)
 Fold.error <- numeric(K)
 for (i in 1:K) {
   test.ind <- which(folds == i)
-  glm.i <- glm(sex_genetics ~ ., family = binomial(link='logit'), data = data_imputed[-test.ind,])
-  test_predictions.i <- predict(glm.i, data_imputed[test.ind,])
+  glm.i <- glm(sex_genetics ~ ., data = data_imputed[-test.ind,], family = binomial(link = "logit"))
+  prob_test_predictions.i <- predict(glm.i, data_imputed[test.ind,], type = "response")
+  test_predictions.i <- ifelse(prob_test_predictions.i > 0.5, 1, 0)
   Fold.error[i] <- mean(test_predictions.i == data_imputed[test.ind,]$sex_genetics)
 }
-Fold.error
+KFold.error[1] <- mean(Fold.error)
 
 # decision tree
 Fold.error <- numeric(K)
@@ -83,8 +85,12 @@ KFold.error[2] <- mean(Fold.error)
 Fold.error <- numeric(K)
 for (i in 1:K) {
   test.ind <- which(folds == i)
-  rf.i <- randomForest(sex_genetics ~ ., data = data_imputed[-test.ind,], ntree = 500, importance = TRUE)
+  rf.i <- randomForest(sex_genetics ~ ., data = data_imputed[-test.ind,], ntree = 200, importance = TRUE)
   test_predictions.i <- predict(rf.i, newdata = data_imputed[test.ind,])
   Fold.error[i] <- mean(test_predictions.i == data_imputed[test.ind,]$sex_genetics)
 }
 KFold.error[3] <- mean(Fold.error)
+
+KFold.error <- as.data.frame(KFold.error)
+rownames(KFold.error) <- c("Logit", "Decision Tree", "Random Forest")
+KFold.error
