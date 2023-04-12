@@ -1,0 +1,179 @@
+---
+title: "Imputation methods in mice"
+author: "Aaron Smith"
+date: "January 6, 2021"
+output: html_document
+---
+
+The mice package in R has a lot of methods for imputing missing values. Here we look at how some of these methods perform.
+
+# Methods in mice
+
+Method parameter|Data type|Description
+-|-|-
+2lonly.pmm|any|Level-2 class predictive mean matching
+cart|any|Classification and regression trees
+midastouch|any|Weighted predictive mean matching
+pmm|any|Predictive mean matching
+rf|any|Random forest imputations
+sample|any|Random sample from observed values
+2l.lmer|numeric|Level-1 normal homoscedastic, lmer
+2l.norm|numeric|Level-1 normal heteroscedastic
+2l.pan|numeric|Level-1 normal homoscedastic, pan
+2lonly.mean|numeric|Level-2 class mean
+2lonly.norm|numeric|Level-2 class normal
+mean|numeric|Unconditional mean imputation
+norm|numeric|Bayesian linear regression
+norm.boot|numeric|Linear regression using bootstrap
+norm.nob|numeric|Linear regression ignoring model error
+norm.predict|numeric|Linear regression, predicted values
+quadratic|numeric|Imputation of quadratic terms
+ri|numeric|Random indicator for nonignorable data
+polr|ordered|Proportional odds model
+lda|unordered|Linear discriminant analysis
+polyreg|unordered|Polytomous logistic regression
+2l.bin|binary|Level-1 logistic, glmer
+logreg|binary|Logistic regression
+logreg.boot|binary|Logistic regression with bootstrap
+
+# Load data
+
+```{r}
+#library(printr)
+options(digits = 2)
+nashville <- as.data.frame(readr::read_csv(
+  file = "C:\\Users\\smithaz12\\Desktop\\UCF\\STA6714Spring2021\\input\\Nashville_housing_data_2013_2016.csv",
+  col_types = "nncccccDncccccccncnccnnncnccnnn"
+))
+colnames(nashville) <- make.names(
+  names = colnames(nashville)
+)
+colnames(nashville) <- gsub(
+  x = colnames(nashville),
+  pattern = "[.]",
+  replacement = " "
+)
+colnames(nashville) <- trimws(gsub(
+  x = colnames(nashville),
+  pattern = "\\s+",
+  replacement = " "
+))
+colnames(nashville) <- make.names(
+  names = colnames(nashville)
+)
+nashville <- nashville[,!colnames(nashville) %in% c("X1","Unnamed.0","State")]
+nashville <- nashville[,order(sapply(
+  X = nashville,
+  FUN = class
+))]
+nashville <- nashville[order(apply(
+  X = nashville,
+  MARGIN = 1,
+  FUN = function(x) sum(is.na(x))
+)),]
+nashville <- nashville[,order(sapply(
+  X = nashville,
+  FUN = function(x) sum(is.na(x))
+))]
+rownames(nashville) <- 1:nrow(nashville)
+```
+
+# Filter columns to complete columns and numeric columns with missing values
+
+```{r}
+v_columns <- c(
+  "Sale.Price",
+  "Land.Use","Sold.As.Vacant","Multiple.Parcels.Involved.in.Sale",
+  "Acreage","Neighborhood","Building.Value","Total.Value",
+  "Full.Bath","Finished.Area","Year.Built","Bedrooms","Half.Bath"
+)
+M <- nashville[,v_columns]
+```
+
+# Create initial imputation as starting point, create prediction matrix
+
+```{r}
+require(mice)
+
+M_init <- M[,colnames(M) != "Sale.Price"]
+for(j in colnames(M_init)){
+  if(class(M_init[,j]) == "numeric") M_init[is.na(M_init[,j]),j] <- mean(
+    x = M_init[,j],
+    na.rm = TRUE
+  )
+  if(class(M_init[,j]) == "character"){
+    M_init[is.na(M_init[,j]),j] <- names(sort(
+      x = table(M_init[,j]),
+      decreasing = TRUE
+    ))[1]
+  }
+}
+
+mice_mean <- mice::mice(
+  data = M[,colnames(M) != "Sale.Price"],
+  method = "mean",
+  m = 1,
+  maxit = 1,
+  data.init = M_init,
+  seed = 823
+)
+```
+
+# Impute missing values with mice
+
+```{r}
+v_method <- c(
+  "pmm","sample","cart","rf",
+  "2l.bin",
+  "mean","norm","norm.nob","norm.boot","norm.predict","ri","2l.lmer"
+)
+
+gc()
+list_mice <- lapply(
+  X = v_method,
+  FUN = function(x) try({
+    gc()
+    mice::mice(
+      data = M[,colnames(M) != "Sale.Price"],
+      method = x,
+      predictorMatrix = mice_mean$predictorMatrix,
+      m = 1,
+      maxit = 1,
+      data.init = M_init,
+      seed = 823
+    )
+  })
+)
+gc()
+names(list_mice) <- v_method
+```
+
+# Extract complete data, append target variable
+
+```{r}
+list_complete <- lapply(
+  X = list_mice,
+  FUN = mice::complete
+)
+for(j in names(list_complete)) list_complete[[j]] <- data.frame(
+  Sale.Price = M$Sale.Price,
+  list_complete[[j]]
+)
+```
+
+# Evaluate imputation using linear regression
+
+```{r}
+list_lm <- lapply(
+  X = list_complete,
+  FUN = function(x) lm(
+    data = x,
+    formula = log(Sale.Price) ~.
+  )
+)
+v_mae <- sapply(
+  X = list_lm,
+  FUN = function(x) mean(abs(predict(x) - log(M$Sale.Price)))
+)
+sort(v_mae)
+```
