@@ -19,6 +19,29 @@ View(d.bird)
 d.bird$sex_genetics[d.bird$sex_genetics == "M"] <- "m"
 d.bird$sex_genetics[d.bird$sex_genetics == "F"] <- "f"
 
+# make new variable season for time of the catch
+d.bird$season <- ifelse(d.bird$month >= 3 & d.bird$month <= 5, "spring",
+                        ifelse(d.bird$month >= 6 & d.bird$month <= 8, "summer",
+                               ifelse(d.bird$month >= 9 & d.bird$month <= 11, "autumn", "winter")))
+d.bird$season <- factor(d.bird$season, levels = c("winter", "spring", "summer", "autumn"), labels = c("0", "1", "2", "3"))
+
+# Remove duplicates 
+d.bird <- d.bird[!duplicated(d.bird, fromLast = TRUE), ]
+
+# Take values from P1 if possible to fill P8 (total of 32 cases)
+if (sum(!is.na(d.bird$P1)) > 0) {
+  d.bird$P8[is.na(d.bird$P8)] <- d.bird$P1[is.na(d.bird$P8)]
+} else {
+  print("NO impuatation possible as P1 is NA")
+}
+
+# check multiple caputres  
+freq_table <- table(d.bird$ringnr)
+freq_table <- freq_table[freq_table > 1]
+freq_table <- sort(freq_table, decreasing = T)
+double_caputre = as.data.frame(freq_table)
+d.bird <- d.bird[!duplicated(d.bird$ringnr, fromLast = TRUE), ]
+
 # select only the adult birds
 df_adult <- d.bird[d.bird$Age>1,]
 
