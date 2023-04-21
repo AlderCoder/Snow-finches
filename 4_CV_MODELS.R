@@ -55,6 +55,7 @@ df_adult_sub$sex_genetics <- as.factor(df_adult_sub$sex_genetics)
 
 # Impute missing value with MICE using the best method from cv imputation with 5 iterations
 data_imputed <- mice::complete(mice(df_adult_sub, m = 5, method = "norm.predict", maxit = 20))
+# stripplot(data_imputed, col=c("grey", "blue"), pch = c(1, 20))
 
 n <- dim(data_imputed)[1]
 KFold.error <- numeric(3)
