@@ -174,7 +174,7 @@ Mode <- function(x) {
 ```
 
 ```{r Logit model}
-imp <- mice(df_adult_sub, seed = 123, print = F, m = 5)
+imp <- mice(df_adult_sub, seed = 123, print = F, m = 35)
 imp <- mice::complete(imp, "all")
 Fold.error <- numeric(K)
 for (i in 1:K) {
@@ -184,12 +184,12 @@ for (i in 1:K) {
   test_data <- df_adult_sub[test.ind,]
   
   # mice 
-  imp_train = mice(train_data, seed = 123, print = F, m=5)
+  imp_train = mice(train_data, seed = 123, print = F, m=35)
   
   # fit model 
   fit_1 <- with(imp_train, glm(sex_genetics ~ season + Age
                                + Wing + P8 + Tarsus + weight + 
-                                 Fat + Muscle + Bill_length,
+                                 Muscle + Bill_length,
                                family = binomial))
   pooled <- pool(fit_1)
   
@@ -224,7 +224,7 @@ We get a slightly better accuracy of **86.5 %** for this model compared to the d
 imp <- mice(df_adult_sub, seed = 123, print = F, m = 5)
 fit <- with(imp, glm(sex_genetics ~ season + Age
                                + Wing + P8 + Tarsus + weight + 
-                                 Fat + Muscle + Bill_length,
+                               Muscle + Bill_length,
                                family = binomial))
 pooled <- pool(fit)
 ```
