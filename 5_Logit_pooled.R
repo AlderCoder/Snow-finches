@@ -39,7 +39,7 @@ if (sum(!is.na(d.bird$P1)) > 0) {
   print("NO impuatation possible as P1 is NA")
 }
 
-# check multiple caputres  
+# check multiple captures  
 freq_table <- table(d.bird$ringnr)
 freq_table <- freq_table[freq_table > 1]
 freq_table <- sort(freq_table, decreasing = T)
@@ -71,7 +71,7 @@ df_adult_sub$Age<- as.numeric(df_adult_sub$Age)
 ### split data   
 
 #param
-imp <- mice(df_adult_sub, seed = 123, print = T, m = 35)
+imp <- mice(df_adult_sub, seed = 123, print = T, m = 35, maxit = 10)
 imp <- mice::complete(imp, "all")
 n <- NROW(df_adult_sub)
 K <- 10
@@ -84,10 +84,10 @@ for (i in 1:K) {
   test_data <- df_adult_sub[test.ind,]
   
   # mice 
-  imp_train = mice(train_data, seed = 123, print = T, m=35)
+  imp_train = mice(train_data, seed = 123, print = T, m=35, maxit = 10)
   
   # fit model 
-  fit_1 <- with(imp_train, glm(sex_genetics ~ season + Age + Wing + P8 + Tarsus + weight + Fat + Muscle + Bill_length, family = binomial))
+  fit_1 <- with(imp_train, glm(sex_genetics ~ season + Age + Wing + P8 + Tarsus + weight + Fat + Muscle + Bill_length + Wing*P8, family = binomial))
   pooled <- pool(fit_1)
   
   # hack for predict 
@@ -113,3 +113,9 @@ for (i in 1:K) {
 }
 
 (KFold.error <- mean(Fold.error))
+
+
+imp <- mice(df_adult_sub, seed = 123, print = T, m = 35, maxit = 10)
+fit <- with(imp, glm(sex_genetics ~ Season + Age + Wing + P8 + Tarsus + weight + Fat + Muscle + Bill_length + Wing*P8, family = binomial))
+pooled <- pool(fit)
+summary(pooled)

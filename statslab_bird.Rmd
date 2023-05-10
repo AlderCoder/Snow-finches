@@ -24,6 +24,7 @@ if(!('reprtree' %in% installed.packages())){
 }
 for(p in c(cran.packages, 'reprtree')) eval(substitute(library(pkg), list(pkg=p)))
 library(reprtree)
+set.seed(123)
 ```
 
 ## Data pre processing
@@ -68,7 +69,7 @@ There are some duplicates in the dataset which we remove. Additionally, there is
 # Remove duplicates 
 d.bird <- d.bird[!duplicated(d.bird, fromLast = TRUE), ]
 
-# check multiple caputres  
+# check multiple captures  
 freq_table <- table(d.bird$ringnr)
 freq_table <- freq_table[freq_table > 1]
 freq_table <- sort(freq_table, decreasing = T)
@@ -99,7 +100,6 @@ We now train three different models on this data - a decision tree, a random for
 
 We use a ten fold cross-validation to get the accuracy score of the decision tree. The advantage of this method is that it can handle the missing values.
 ```{r Decision Tree CV}
-set.seed(123)
 n <- dim(df_adult_sub)[1]
 K <- 10
 folds <- sample(cut(seq(1,n),breaks=K,labels=FALSE), replace = FALSE)
@@ -142,11 +142,18 @@ This produces a rather simple tree. The 0 values represent male birds and the 1 
 
 We again use ten fold cross-validation to get the accuracy score of the random forest. The random forest can also handle missing values by specifying the na.action parameter. This will start by imputing the missing values using the column-wise median or mode. Then it grows a forest and computes proximities, before iterating through and constructing a new forest using these newly imputed values and repeating this process on repeat.
 ```{r Random Forest}
+## Tuning of parameter done via this code
+
+#ctrl <- trainControl(method = "cv", number = 10)
+#tunegrid <- expand.grid(.mtry=c(3:9), .ntree = seq(100, 1000, 100))
+#ntree_tune <- train(sex_genetics ~ ., data = df_adult_sub, na.action = na.roughfix,
+                    #method = customRF, tuneGrid = tunegrid, trControl = ctrl)
+
 Fold.error <- numeric(K)
 for (i in 1:K) {
   test.ind <- which(folds == i)
-  rf.i <- randomForest(sex_genetics ~ ., data = df_adult_sub[-test.ind,], ntree = 200,
-                       importance = TRUE, na.action = na.roughfix)
+  rf.i <- randomForest(sex_genetics ~ ., data = df_adult_sub[-test.ind,], ntree = 400, 
+                       mtry = 3, importance = TRUE, na.action = na.roughfix)
   test_data <- na.omit(df_adult_sub[test.ind,])
   test_predictions.i <- predict(rf.i, newdata = test_data, na.action = na.omit)
   Fold.error[i] <- mean(test_predictions.i == test_data$sex_genetics)
@@ -154,7 +161,7 @@ for (i in 1:K) {
 cat("Accuracy Random Forest:", round(mean(Fold.error), digits = 5))
 ```
 
-We get an accuracy around **84 %**, but this may only be due to the fact that we had to omit the test data with NAs and therefore we had less test data compared to the decision tree.
+We get an accuracy around **84.5 %**. We tuned the parameter ntree and mtry and with this combiantion we get the best result. In the plot below we see the importance of the different variables. Like in the decision tree, wing and P8 are the most important ones.
 
 ```{r Random Forest plot, echo = FALSE}
 model <- randomForest(sex_genetics ~ ., data = df_adult_sub, ntree = 200, importance = TRUE,
@@ -165,7 +172,51 @@ varImpPlot(model)
 
 ## Logistic regression model
 
-We again use ten fold cross-validation to compute the accuracy score of the logistic regression model. Because this model type can not handle missing values, the missing values are first imputed using MICE. This works by producing 35 separate imputations on which the logistic regression model is fitted independently, and the modal classification adopted.
+### Logistic regression with complete cases
+
+Before we use MICE to impute the missing values, we only use the complete cases with 741 observation. Because there might be some interactions we build a model which includes them. We do model selection with AIC and then we fit the best model with ten fold cross-validation to compute the accuracy score.
+
+```{r Logistic model with complete cases}
+# use only the complete cases
+df_adult_sub_comp <- na.omit(df_adult_sub)
+
+# define the full model and fit it
+fit <- glm(sex_genetics ~ season + Age + Wing + P8 + Tarsus + weight + Fat + Muscle
+           + Bill_length + Wing*P8 + Wing*Bill_length + Wing*Tarsus + Wing*weight
+           + P8*Bill_length + P8*Tarsus + P8*weight + Tarsus*weight + Tarsus*Bill_length
+           + weight*Bill_length, data = df_adult_sub_comp, family = "binomial")
+
+# use the step function to select the best model. It uses AIC criterion
+step(fit, direction = "both", trace = 0)
+
+# we get this model as our best
+best_model <- formula(sex_genetics ~ season + Wing + P8 + Tarsus + Muscle + Bill_length)
+
+#do 10 fold cross validation with the best model
+set.seed(123)
+n <- dim(df_adult_sub_comp)[1]
+folds <- sample(cut(seq(1,n),breaks=K,labels=FALSE), replace = FALSE)
+Fold.error <- numeric(K)
+for (i in 1:K) {
+  test.ind <- which(folds == i)
+  glm.i <- glm(best_model, data = df_adult_sub_comp[-test.ind,], family = binomial)
+  prob_test_predictions.i <- predict(glm.i, df_adult_sub_comp[test.ind,], type = "response")
+  test_predictions.i <- ifelse(prob_test_predictions.i > 0.5, 1, 0)
+  Fold.error[i] <- mean(test_predictions.i == df_adult_sub_comp[test.ind,]$sex_genetics)
+}
+cat("Accuracy Logistic Model Complete Cases:", round(mean(Fold.error), digits = 5))
+```
+
+This yields an accuracy of **86.1 %**. Now we look at the estimated coefficients of the model and there significance.
+
+```{r Logistic print estimates, echo = FALSE}
+summary(glm(best_model, data = df_adult_sub_comp, family = binomial))$coefficients
+logit_comp <- summary(glm(best_model, data = df_adult_sub_comp, family = binomial))$coefficients
+```
+
+### Logistic regression with imputing missing values
+
+We again use ten fold cross-validation to compute the accuracy score of the logistic regression model. Because this model type can not handle missing values, the missing values are first imputed using MICE. This works by producing 35 separate imputations on which the logistic regression model is fitted independently, and the modal classification adopted. We use again the best model select by the AIC.
 
 ```{r Mode function, echo = FALSE}
 Mode <- function(x) {
@@ -175,7 +226,7 @@ Mode <- function(x) {
 ```
 
 ```{r Logit model}
-imp <- mice(df_adult_sub, seed = 123, print = F, m = 35)
+imp <- mice(df_adult_sub, seed = 123, print = F, m = 35, maxit = 10)
 imp <- mice::complete(imp, "all")
 Fold.error <- numeric(K)
 for (i in 1:K) {
@@ -185,13 +236,11 @@ for (i in 1:K) {
   test_data <- df_adult_sub[test.ind,]
   
   # mice 
-  imp_train = mice(train_data, seed = 123, print = F, m=35)
+  imp_train = mice(train_data, seed = 123, print = F, m=35, maxit = 10)
   
   # fit model 
-  fit_1 <- with(imp_train, glm(sex_genetics ~ season + Age
-                               + Wing + P8 + Tarsus + weight + 
-                                 Muscle + Bill_length,
-                               family = binomial))
+  fit_1 <- with(imp_train, glm(sex_genetics ~ season + Wing + P8 + Tarsus + Muscle
+                               + Bill_length, family =  binomial))
   pooled <- pool(fit_1)
   
   # hack for predict 
@@ -216,17 +265,15 @@ for (i in 1:K) {
   Fold.error[i] <- mean(test_predictions.i == df_adult_sub[test.ind,]$sex_genetics)
   
 }
-cat("Accuracy Logit Model:", round(mean(Fold.error), digits = 5))
+cat("Accuracy Logistic Model with imputation:", round(mean(Fold.error), digits = 5))
 ```
 
-This results in a slightly improved accuracy of **87.1 %**. Now we examine the pooled estimates for the coefficients of the logistic regression model to the significance of them. We omit the fat variable because the standard error of the coefficient estimates was too high and the inclusion of the fat variable, as a predictor, explains too little variance in the regressand.
+This results in a slightly improved accuracy of **87.9 %**. Now we examine the pooled estimates for the coefficients of the logistic regression model to the significance of them. We omit the fat variable because the standard error of the coefficient estimates was too high and the inclusion of the fat variable, as a predictor, explains too little variance in the regressand.
 
 ```{r Logit model estimates, echo = FALSE}
-imp <- mice(df_adult_sub, seed = 123, print = F, m = 35)
-fit <- with(imp, glm(sex_genetics ~ season + Age
-                               + Wing + P8 + Tarsus + weight + 
-                               Muscle + Bill_length,
-                               family = binomial))
+imp <- mice(df_adult_sub, seed = 123, print = F, m = 35, maxit = 10)
+fit <- with(imp, glm(sex_genetics ~ season + Wing + P8 + Tarsus +  
+                               Muscle + Bill_length, family = binomial))
 pooled <- pool(fit)
 ```
 
@@ -235,6 +282,14 @@ summary(pooled)
 ```
 
 Similarly, to the decision tree this suggests that both the Wing and P8 variables are highly significant and the Bill length and Muscle variables are significant on a 5 % level.
+
+### Comparison of the coefficient estimates
+
+Here we compare the coefficients of the logistic regression only with the complete cases to the one with the imputed data. The significant coefficients are more or less the same. For the other there is a difference.
+```{r estimate comparison, echo = FALSE}
+logit_mice <- summary(pooled)
+cbind(logit_comp[,1], logit_mice[,2])
+```
 
 ## Conclusion
 In conclusion, the imputation of missing values via MICE and subsequent classification using logistic regression is the best model, yielding around 87 % accuracy for the prediction of the genetic sex of the birds. The two most important variables to measure going forward are the Wing length and the feather length (P8).
