@@ -1,0 +1,290 @@
+---
+  title: "Statistics Lab Bird"
+author: "Joel Alder, Connor Charlton, Samir Hauser"
+date: "2023-05-02"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(readr)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(mice)
+library(xgboost)
+options(repos='http://cran.rstudio.org')
+have.packages <- installed.packages()
+cran.packages <- c('devtools','plotrix','randomForest','tree')
+to.install <- setdiff(cran.packages, have.packages[,1])
+if(length(to.install)>0) install.packages(to.install)
+library(devtools)
+if(!('reprtree' %in% installed.packages())){
+install_github('munoztd0/reprtree')
+}
+for(p in c(cran.packages, 'reprtree')) eval(substitute(library(pkg), list(pkg=p)))
+library(reprtree)
+set.seed(123)
+```
+
+Plumage coloration of white-winged snowfinches, a high-elevation bird species, is very similar in males and female but the sexes might differ in morphological traits such as wing length, feather length or bill length. For a population dynamics study, we ring and measure snowfinches and take salivary samples to genetically sex the birds. This project was aimed at developing a classification method to use morphological traits for sexing the birds when we don’t have genetic data.
+
+## Data pre processing
+
+We first load in the data, in preparation for preprocessing it.
+
+```{r load the data, echo = FALSE}
+# Loading the data and library
+path <- "C:/Users/joela/OneDrive - ETH Zurich/FS23/Snow-finches/Data/SF_ringlist.csv"   # Enter path of data storage here.
+d.bird <- read_delim(path, 
+                     delim = ";", escape_double = FALSE, trim_ws = TRUE)
+```
+
+We clean the genetic sex response variable labels, by merging labels that are capitalised differently, and transform them from male and female to 0 and 1.
+
+```{r response transform}
+d.bird$sex_genetics[d.bird$sex_genetics == "M"] <- "m"
+d.bird$sex_genetics[d.bird$sex_genetics == "F"] <- "f"
+d.bird$sex_genetics[d.bird$sex_genetics == "m"] <- 0
+d.bird$sex_genetics[d.bird$sex_genetics == "f"] <- 1
+```
+
+Next we define a new predictor variable - season, which indicates the season of the ringing. We do this because the values of some of the variables depend on the time of year; for example the weight of the same bird can differ between summer and winter.
+
+```{r season}
+# Defining the season variable values
+d.bird$season <- ifelse(d.bird$month >= 3 & d.bird$month <= 5, "spring",
+                        ifelse(d.bird$month >= 6 & d.bird$month <= 8, "summer",
+                               ifelse(d.bird$month >= 9 & d.bird$month <= 11,
+                                      "autumn", "winter")))
+d.bird$season <- factor(d.bird$season, levels = c("winter", "spring", "summer", "autumn"),
+                        labels = c("0", "1", "2", "3"))
+```
+
+There are some duplicate instances (instances where the same ringing event is recorded more than once) in the dataset which we remove. Additionally, there is a possibility that one bird is captured more than once. Where this is the case, only the latest observation is retained. Afterwards, only the adult birds with genetic sex labels are retained. The columns wanted for training are selected separately, but this is the full set of morphological traits used for prediction.
+
+```{r}
+# Removing duplicate ringing events
+d.bird <- d.bird[!duplicated(d.bird, fromLast = TRUE), ]
+# Checking for multiple captures of the same bird and retaining only the data 
+# from the latest capture
+d.bird <- d.bird[!duplicated(d.bird$ringnr, fromLast = TRUE), ]
+# Removing caputures of nestlings
+df_adult <- d.bird[d.bird$Age>1,]
+# Removing instances with missing predictor variable values
+df_adult <- df_adult[complete.cases(df_adult["sex_genetics"]),]
+# Removing variables not used as predictor variables
+cols <- c("season", "Age", "Wing", "P8", "Tarsus", "weight", "Fat", "Muscle",
+          "Bill_length", "sex_genetics")
+df_adult_sub = data.frame(df_adult[cols])
+# Converting categorical variables to factors
+df_adult_sub$Fat <- as.factor(df_adult_sub$Fat)
+df_adult_sub$Muscle <- as.factor(df_adult_sub$Muscle)
+df_adult_sub$sex_genetics <- as.factor(df_adult_sub$sex_genetics)
+str(df_adult_sub)
+```
+
+Five different models are trained on this data - a decision tree, a random forest, an XGBoost model, a simple logistic regression model on only the complete cases and lastly a logistic regression model with missing values imputed using Multiple Imputation by Chained Equation (MICE). The generalisation accuracy of the predictions (as computed via cross-validation) is used as the model evaluation metric.
+
+## Decision Tree
+
+Ten fold cross-validation is used to calculate the generalisation accuracy of the decision tree. The advantage of decision trees is that they can handle missing values.
+
+```{r Decision Tree CV}
+# The number of observations is stored under variable "n".
+n <- dim(df_adult_sub)[1]
+# The number of CV folds is stored under variable "K".
+K <- 10
+# The instance assignments to folds are then generated.
+folds <- sample(cut(seq(1,n),breaks=K,labels=FALSE), replace = FALSE)
+Fold.error <- numeric(K)
+# Cross-validation is used to assess the generalisation accuracy of the model.
+for (i in 1:K) {
+  test.ind <- which(folds == i)
+  # The model is trained on the training data.
+  tree_model.i <- rpart(sex_genetics ~ ., data = df_adult_sub[-test.ind,], method = "class")
+  # The model is run for prediction on the test data.
+  test_predictions.i <- predict(tree_model.i, df_adult_sub[test.ind,], type = "class")
+  # The error over the test data is calculated.
+  Fold.error[i] <- mean(test_predictions.i == df_adult_sub[test.ind,]$sex_genetics)
+}
+cat("Accuracy Decision Tree:", round(mean(Fold.error), digits = 5))
+```
+
+The accuracy is around **84.7 %**. This accuracy is calculated by weighting the misclassifaction errors equally both ways (misclassifying male as female and female as male). It was considered whether the two errors should be classified differently. In particular, there is a case to argue that the misclassification of a female bird as a male bird should be weighted with a higher loss than the opposite, since there are fewer females in the population at large. Now the decision tree is plotted, to see which variables are most important.
+
+```{r Decision Tree example, echo = FALSE}
+# Train a decision tree on the whole data set
+tree_model <- rpart(formula = sex_genetics ~ ., data = df_adult_sub, method = "class",
+                    parms = list(loss = matrix(c(0,1,1,0), nrow = 2)))
+# Plot the decision tree
+rpart.plot(tree_model)
+```
+
+This produces a rather simple tree. The 0 values represent male birds and the 1 values represent female birds. As can be seen from the tree, the wing variable is the most informative for the prediction of genetic sex, with 76% of instances classified using wing length alone and with the probability of a bird being female reducing to 0.13 when conditioning on the wing length exceeding 119mm. It can also be seen that only one other variable (P8) is used for classification in the remaining 24% of instances. Amongst these instances, those with P8 exceeding 94mm are classified as male (with probability 1 - 0.35 = 0.65) and the rest (amounting to 21% of all the instances in total) are classified as female with probability 0.85.
+
+## Random Forest
+
+Ten fold cross-validation is again used to calculate the generalisation accuracy of the random forest. The random forest can also handle missing values by specifying the na.action parameter. This will start by imputing the missing values using the column-wise median or mode. Then it grows a forest and computes proximities, before iterating through and constructing a new forest using these newly imputed values and repeating this process iteratively.
+
+```{r Random Forest}
+### Parameters are tuned and the parameter tuning code commented out once values
+# parameter values have been determined.
+#ctrl <- trainControl(method = "cv", number = 10)
+#tunegrid <- expand.grid(.mtry=c(3:9), .ntree = seq(100, 1000, 100))
+#ntree_tune <- train(sex_genetics ~ ., data = df_adult_sub, na.action = na.roughfix,
+#method = customRF, tuneGrid = tunegrid, trControl = ctrl)
+
+### 10 fold cross validation with function randomForest
+Fold.error <- numeric(K)
+for (i in 1:K) {
+  test.ind <- which(folds == i)
+  # The model is trained on the training data.
+  rf.i <- randomForest(sex_genetics ~ ., data = df_adult_sub[-test.ind,], ntree = 800, 
+                       mtry = 1, importance = TRUE, na.action = na.roughfix)
+  # The model is run for prediction on the test data and columns with missing 
+  # values are removed.
+  test_data <- na.omit(df_adult_sub[test.ind,])
+  test_predictions.i <- predict(rf.i, newdata = test_data, na.action = na.omit)
+  # The error over the test data is calculated.
+  Fold.error[i] <- mean(test_predictions.i == test_data$sex_genetics)
+}
+cat("Accuracy Random Forest:", round(mean(Fold.error), digits = 5))
+```
+
+An accuracy around **85.3 %** is obtained. The train function was used to tune the two hyperparameters ntree and mtry. In the plot below, the importance of the different variables can be seen, in particular it reveals again that wing length and P8 are the most informative predictors.
+
+```{r Random Forest plot, echo = FALSE}
+model <- randomForest(sex_genetics ~ ., data = df_adult_sub, ntree = 800, mtry = 1, importance = TRUE,
+                      na.action = na.roughfix)
+varImpPlot(model)
+```
+
+## XGBoost
+
+Ten fold cross-validation is again used to calculate the generalisation accuracy of the XGBoost method. This method can also handle missing values and it works by training a decision tree and sequentially attempting to correct the errors made by the previous tree.
+
+
+This yields an accuracy of **86.3 %**, making it the most accurate model thus far. The final models to consider are logistic regression models.
+
+## Logistic regression model
+
+### Logistic regression with complete cases
+
+Before MICE is used to impute the missing values, we compute a separate model (for baseline comparison) in which only the complete cases (amounting to around 700 instances) are used. Because the decision tree indicates there could be some interactions, a model is built which includes them. Model selection is run using Alakine's Information Criterion (AIC) and the corresponding best model (using season, wing length, P8, tarsus length, muscle score and bill length) is fitted with ten fold cross-validation to compute the generalisation accuracy. (It should be noted then that no interactions were retained after running the model selection.)
+
+```{r Logistic model with complete cases}
+# All incomplete cases are removed.
+df_adult_sub_comp <- na.omit(df_adult_sub)
+# A logistic regression model over all predictor variables and associated 
+# interactions is fitted on these complete cases.
+fit <- glm(sex_genetics ~ season + Age + Wing + P8 + Tarsus + weight + Fat + Muscle
+           + Bill_length + Wing*P8 + Wing*Bill_length + Wing*Tarsus + Wing*weight
+           + P8*Bill_length + P8*Tarsus + P8*weight + Tarsus*weight + Tarsus*Bill_length
+           + weight*Bill_length, data = df_adult_sub_comp, family = "binomial")
+# The best submodel is selected using the step function which calls AIC.
+step(fit, direction = "both", trace = 0)
+# The best model is recorded.
+best_model <- formula(sex_genetics ~ season + Wing + P8 + Tarsus + Muscle + Bill_length)
+# The generalisation error of the best model is computed via 10-fold CV.
+set.seed(123)
+n <- dim(df_adult_sub_comp)[1]
+folds <- sample(cut(seq(1,n),breaks=K,labels=FALSE), replace = FALSE)
+Fold.error <- numeric(K)
+for (i in 1:K) {
+  test.ind <- which(folds == i)
+  # The model is trained on the training data.
+  glm.i <- glm(best_model, data = df_adult_sub_comp[-test.ind,], family = binomial)
+  # The model is run for prediction on the test data.
+  prob_test_predictions.i <- predict(glm.i, df_adult_sub_comp[test.ind,], type = "response")
+  test_predictions.i <- ifelse(prob_test_predictions.i > 0.5, 1, 0)
+  # The error over the test data is calculated.
+  Fold.error[i] <- mean(test_predictions.i == df_adult_sub_comp[test.ind,]$sex_genetics)
+}
+cat("Accuracy Logistic Model Complete Cases:", round(mean(Fold.error), digits = 5))
+```
+
+This yields an accuracy of **86.1 %**. Now the estimated coefficients of the model and their associated standard errors and significances are assessed. Again, it is observed that wing length and P8 are the most informative predictors.
+
+```{r Logistic print estimates, echo = FALSE}
+summary(glm(best_model, data = df_adult_sub_comp, family = binomial))$coefficients
+logit_comp <- summary(glm(best_model, data = df_adult_sub_comp, family = binomial))$coefficients
+```
+
+### Logistic regression with missing values imputed via MICE
+
+Ten fold cross-validation is again used to compute the generalisation accuracy of the logistic regression model. Because this model type cannot handle missing values, the missing values are first imputed using MICE. This works by producing 35 separate imputations (because the [literature]{https://www.ebpi.uzh.ch/dam/jcr:dc0cef17-29c7-4e61-8d33-e690561ab7ae/mi_intro20191001.pdf} indicates that the maximum percentage of missing values for any variable - in this case 35% missing for the bill length - is the optimal number of imputations to be made) on which the logistic regression model is fitted independently, and the modal classification adopted. Again the best model, as selected via AIC on the complete cases, is used.
+
+```{r Mode function, echo = FALSE}
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+```
+
+```{r Logistic model}
+# The whole dataset is imputed 35 times using a maximum of 10 cycles to generate
+# each imputation.
+imp <- mice(df_adult_sub, seed = 123, print = F, m = 35, maxit = 10)
+imp <- mice::complete(imp, "all")
+Fold.error <- numeric(K)
+for (i in 1:K) {
+  test.ind <- which(folds == i)
+  
+  # The dataset is segregated into testing a training data.
+  train_data <- df_adult_sub[-test.ind,]
+  test_data <- df_adult_sub[test.ind,]
+  
+  # Each imputation is generated on the training data alone.
+  imp_train = mice(train_data, seed = 123, print = F, m=35, maxit = 10)
+  
+  # The model is then fitted on each of the 35 imputations.
+  fit_1 <- with(imp_train, glm(sex_genetics ~ season + Wing + P8 + Tarsus + Muscle
+                               + Bill_length, family =  binomial))
+  
+  # The 35 fitted models are then poooled using Rubin's rules.
+  pooled <- pool(fit_1)
+  pooled_lm = fit_1$analyses[[1]]
+  pooled_lm$coefficients = summary(pooled)$estimate
+  
+  # The genetic sex variable is then removed from the test data.
+  size = nrow(imp_train[[1]][test.ind,-(10)])
+  
+  # Each of the fitted models are then run over the test data.
+  dat = matrix(nrow = size, ncol = 35)
+  for (k in 1:35)
+  {
+    predicted_values = predict(pooled_lm, newdata = imp[[k]][test.ind,-(10)],
+                               type="response")
+    binary_predictions <- ifelse(predicted_values > 0.5, 1, 0)
+    dat[,k] = binary_predictions
+  }
+  
+  # The modal prediction is adopted.
+  test_predictions.i <- apply(dat,1,Mode)
+  
+  # The error of this modal prediction is calculated relative to the true labels.
+  Fold.error[i] <- mean(test_predictions.i == df_adult_sub[test.ind,]$sex_genetics)
+  
+}
+cat("Accuracy Logistic Model with imputation:", round(mean(Fold.error), digits = 5))
+```
+
+This results in a slightly improved generalisation accuracy of **87.9 %**. Now the standard errors and significances of the pooled estimates, for the coefficients of the logistic regression model, are assessed.
+
+```{r Logit model estimates, echo = FALSE}
+imp <- mice(df_adult_sub, seed = 123, print = F, m = 35, maxit = 10)
+fit <- with(imp, glm(sex_genetics ~ season + Wing + P8 + Tarsus +  
+                       Muscle + Bill_length, family = binomial))
+pooled <- pool(fit)
+```
+
+```{r Logit model estimates output}
+summary(pooled)
+```
+
+Similarly, to the decision tree this suggests that both the wing length and P8 variables are highly significant and the bill length and muscle score variables are significant on a 5% level. It is also observed that the coefficients and their associated standard errors when calculated with MICE imputation and pooling are approximately the same as in the complete case model, so the latter provides a simple solution if the MICE-based model is deemed too complex for relevant stakeholders.
+
+## Conclusion
+
+In conclusion, the imputation of missing values via MICE and subsequent classification using logistic regression is the most accurate model, yielding around 88 % accuracy for the prediction of the genetic sex of the birds. However, a simple tree and logistic regression model on complete cases only are almost as accurate and so when taking into consideration the fact that they are far simpler, they may be be judged to be preferable. Importantly also, the two most important variables to measure going forward are the wing length and the feather length (P8).
