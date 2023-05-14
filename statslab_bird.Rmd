@@ -142,18 +142,18 @@ This produces a rather simple tree. The 0 values represent male birds and the 1 
 
 We again use ten fold cross-validation to get the accuracy score of the random forest. The random forest can also handle missing values by specifying the na.action parameter. This will start by imputing the missing values using the column-wise median or mode. Then it grows a forest and computes proximities, before iterating through and constructing a new forest using these newly imputed values and repeating this process on repeat.
 ```{r Random Forest}
-## Tuning of parameter done via this code
-
+### Tuning of parameter done via this code
 #ctrl <- trainControl(method = "cv", number = 10)
 #tunegrid <- expand.grid(.mtry=c(3:9), .ntree = seq(100, 1000, 100))
 #ntree_tune <- train(sex_genetics ~ ., data = df_adult_sub, na.action = na.roughfix,
                     #method = customRF, tuneGrid = tunegrid, trControl = ctrl)
 
+### 10 fold cross validation with function randomForest
 Fold.error <- numeric(K)
 for (i in 1:K) {
   test.ind <- which(folds == i)
-  rf.i <- randomForest(sex_genetics ~ ., data = df_adult_sub[-test.ind,], ntree = 400, 
-                       mtry = 3, importance = TRUE, na.action = na.roughfix)
+  rf.i <- randomForest(sex_genetics ~ ., data = df_adult_sub[-test.ind,], ntree = 800, 
+                       mtry = 1, importance = TRUE, na.action = na.roughfix)
   test_data <- na.omit(df_adult_sub[test.ind,])
   test_predictions.i <- predict(rf.i, newdata = test_data, na.action = na.omit)
   Fold.error[i] <- mean(test_predictions.i == test_data$sex_genetics)
@@ -161,7 +161,7 @@ for (i in 1:K) {
 cat("Accuracy Random Forest:", round(mean(Fold.error), digits = 5))
 ```
 
-We get an accuracy around **84.5 %**. We tuned the parameter ntree and mtry and with this combiantion we get the best result. In the plot below we see the importance of the different variables. Like in the decision tree, wing and P8 are the most important ones.
+We get an accuracy around **85.3 %**. We used the the train function to tune the two hyperparameter ntree and mtry. In the plot below we see the importance of the different variables. It yields that wing and P8 are the most important ones.
 
 ```{r Random Forest plot, echo = FALSE}
 model <- randomForest(sex_genetics ~ ., data = df_adult_sub, ntree = 200, importance = TRUE,
@@ -283,13 +283,6 @@ summary(pooled)
 
 Similarly, to the decision tree this suggests that both the Wing and P8 variables are highly significant and the Bill length and Muscle variables are significant on a 5 % level.
 
-### Comparison of the coefficient estimates
-
-Here we compare the coefficients of the logistic regression only with the complete cases to the one with the imputed data. The significant coefficients are more or less the same. For the other there is a difference.
-```{r estimate comparison, echo = FALSE}
-logit_mice <- summary(pooled)
-cbind(logit_comp[,1], logit_mice[,2])
-```
-
 ## Conclusion
-In conclusion, the imputation of missing values via MICE and subsequent classification using logistic regression is the best model, yielding around 87 % accuracy for the prediction of the genetic sex of the birds. The two most important variables to measure going forward are the Wing length and the feather length (P8).
+In conclusion, the imputation of missing values via MICE and subsequent classification using logistic regression is the best model, yielding around 87 % accuracy for the prediction of the genetic sex of the birds. The
+two most important variables to measure going forward are the Wing length and the feather length (P8).
